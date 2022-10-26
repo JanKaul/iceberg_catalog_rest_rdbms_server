@@ -7,7 +7,7 @@ license = "Unlicense"
 edition = "2018"
 
 [features]
-default = ["client", "server"]
+default = ["server"]
 client = [
     "serde_urlencoded",
     "hyper", "hyper-openssl", "hyper-tls", "native-tls", "openssl", "url"
