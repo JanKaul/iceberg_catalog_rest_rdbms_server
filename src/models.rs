@@ -4,7 +4,7 @@
 use crate::header;
 use crate::models;
 
-type Namespace = String;
+type Namespace = Vec<String>;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "conversion", derive(frunk::LabelledGeneric))]
