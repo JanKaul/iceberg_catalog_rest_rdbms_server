@@ -21,7 +21,7 @@ use tokio::net::TcpListener;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "ios")))]
 use openssl::ssl::{Ssl, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod};
 
-use openapi_client::models;
+use iceberg_catalog_rest_rdbms_server::models;
 
 use clap::{App, Arg};
 
@@ -55,8 +55,10 @@ pub async fn create(addr: &str, https: bool) {
     let service = MakeAllowAllAuthenticator::new(service, "cosmo");
 
     #[allow(unused_mut)]
-    let mut service =
-        openapi_client::server::context::MakeAddContext::<_, EmptyContext>::new(service);
+    let mut service = iceberg_catalog_rest_rdbms_server::server::context::MakeAddContext::<
+        _,
+        EmptyContext,
+    >::new(service);
 
     if https {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "ios"))]
@@ -120,8 +122,8 @@ impl<C> Server<C> {
     }
 }
 
-use openapi_client::server::MakeService;
-use openapi_client::{
+use iceberg_catalog_rest_rdbms_server::server::MakeService;
+use iceberg_catalog_rest_rdbms_server::{
     Api, CreateNamespaceResponse, CreateTableResponse, DropNamespaceResponse, DropTableResponse,
     GetConfigResponse, GetTokenResponse, ListNamespacesResponse, ListTablesResponse,
     LoadNamespaceMetadataResponse, LoadTableResponse, RenameTableResponse, ReportMetricsResponse,
