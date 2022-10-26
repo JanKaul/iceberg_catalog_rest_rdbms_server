@@ -12,15 +12,15 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use swagger::{Has, XSpanIdString};
 use swagger::auth::MakeAllowAllAuthenticator;
 use swagger::EmptyContext;
+use swagger::{Has, XSpanIdString};
 use tokio::net::TcpListener;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "ios")))]
 use openssl::ssl::{Ssl, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod};
 
-use openapi_client::models;
+use iceberg_catalog_rest_rdbms_server::models;
 
 /// Builds an SSL implementation for Simple HTTPS from some hard-coded file names
 pub async fn create(addr: &str, https: bool) {
@@ -33,10 +33,10 @@ pub async fn create(addr: &str, https: bool) {
     let service = MakeAllowAllAuthenticator::new(service, "cosmo");
 
     #[allow(unused_mut)]
-    let mut service =
-        openapi_client::server::context::MakeAddContext::<_, EmptyContext>::new(
-            service
-        );
+    let mut service = iceberg_catalog_rest_rdbms_server::server::context::MakeAddContext::<
+        _,
+        EmptyContext,
+    >::new(service);
 
     if https {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "ios"))]
@@ -46,12 +46,16 @@ pub async fn create(addr: &str, https: bool) {
 
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "ios")))]
         {
-            let mut ssl = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).expect("Failed to create SSL Acceptor");
+            let mut ssl = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())
+                .expect("Failed to create SSL Acceptor");
 
             // Server authentication
-            ssl.set_private_key_file("examples/server-key.pem", SslFiletype::PEM).expect("Failed to set private key");
-            ssl.set_certificate_chain_file("examples/server-chain.pem").expect("Failed to set certificate chain");
-            ssl.check_private_key().expect("Failed to check private key");
+            ssl.set_private_key_file("examples/server-key.pem", SslFiletype::PEM)
+                .expect("Failed to set private key");
+            ssl.set_certificate_chain_file("examples/server-chain.pem")
+                .expect("Failed to set certificate chain");
+            ssl.check_private_key()
+                .expect("Failed to check private key");
 
             let tls_acceptor = ssl.build();
             let tcp_listener = TcpListener::bind(&addr).await.unwrap();
@@ -76,7 +80,10 @@ pub async fn create(addr: &str, https: bool) {
         }
     } else {
         // Using HTTP
-        hyper::server::Server::bind(&addr).serve(service).await.unwrap()
+        hyper::server::Server::bind(&addr)
+            .serve(service)
+            .await
+            .unwrap()
     }
 }
 
@@ -87,45 +94,41 @@ pub struct Server<C> {
 
 impl<C> Server<C> {
     pub fn new() -> Self {
-        Server{marker: PhantomData}
+        Server {
+            marker: PhantomData,
+        }
     }
 }
 
-
-use openapi_client::{
-    Api,
-    CreateNamespaceResponse,
-    CreateTableResponse,
-    DropNamespaceResponse,
-    DropTableResponse,
-    ListNamespacesResponse,
-    ListTablesResponse,
-    LoadNamespaceMetadataResponse,
-    LoadTableResponse,
-    RenameTableResponse,
-    ReportMetricsResponse,
-    TableExistsResponse,
-    UpdatePropertiesResponse,
-    UpdateTableResponse,
-    GetConfigResponse,
-    GetTokenResponse,
+use iceberg_catalog_rest_rdbms_server::server::MakeService;
+use iceberg_catalog_rest_rdbms_server::{
+    Api, CreateNamespaceResponse, CreateTableResponse, DropNamespaceResponse, DropTableResponse,
+    GetConfigResponse, GetTokenResponse, ListNamespacesResponse, ListTablesResponse,
+    LoadNamespaceMetadataResponse, LoadTableResponse, RenameTableResponse, ReportMetricsResponse,
+    TableExistsResponse, UpdatePropertiesResponse, UpdateTableResponse,
 };
-use openapi_client::server::MakeService;
 use std::error::Error;
 use swagger::ApiError;
 
 #[async_trait]
-impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
+impl<C> Api<C> for Server<C>
+where
+    C: Has<XSpanIdString> + Send + Sync,
 {
     /// Create a namespace
     async fn create_namespace(
         &self,
         prefix: String,
         create_namespace_request: Option<models::CreateNamespaceRequest>,
-        context: &C) -> Result<CreateNamespaceResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<CreateNamespaceResponse, ApiError> {
         let context = context.clone();
-        info!("create_namespace(\"{}\", {:?}) - X-Span-ID: {:?}", prefix, create_namespace_request, context.get().0.clone());
+        info!(
+            "create_namespace(\"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            create_namespace_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -135,10 +138,16 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         prefix: String,
         namespace: String,
         create_table_request: Option<models::CreateTableRequest>,
-        context: &C) -> Result<CreateTableResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<CreateTableResponse, ApiError> {
         let context = context.clone();
-        info!("create_table(\"{}\", \"{}\", {:?}) - X-Span-ID: {:?}", prefix, namespace, create_table_request, context.get().0.clone());
+        info!(
+            "create_table(\"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            create_table_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -147,10 +156,15 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         &self,
         prefix: String,
         namespace: String,
-        context: &C) -> Result<DropNamespaceResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<DropNamespaceResponse, ApiError> {
         let context = context.clone();
-        info!("drop_namespace(\"{}\", \"{}\") - X-Span-ID: {:?}", prefix, namespace, context.get().0.clone());
+        info!(
+            "drop_namespace(\"{}\", \"{}\") - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -161,10 +175,17 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         namespace: String,
         table: String,
         purge_requested: Option<bool>,
-        context: &C) -> Result<DropTableResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<DropTableResponse, ApiError> {
         let context = context.clone();
-        info!("drop_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}", prefix, namespace, table, purge_requested, context.get().0.clone());
+        info!(
+            "drop_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            table,
+            purge_requested,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -173,10 +194,15 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         &self,
         prefix: String,
         parent: Option<String>,
-        context: &C) -> Result<ListNamespacesResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<ListNamespacesResponse, ApiError> {
         let context = context.clone();
-        info!("list_namespaces(\"{}\", {:?}) - X-Span-ID: {:?}", prefix, parent, context.get().0.clone());
+        info!(
+            "list_namespaces(\"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            parent,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -185,10 +211,15 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         &self,
         prefix: String,
         namespace: String,
-        context: &C) -> Result<ListTablesResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<ListTablesResponse, ApiError> {
         let context = context.clone();
-        info!("list_tables(\"{}\", \"{}\") - X-Span-ID: {:?}", prefix, namespace, context.get().0.clone());
+        info!(
+            "list_tables(\"{}\", \"{}\") - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -197,10 +228,15 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         &self,
         prefix: String,
         namespace: String,
-        context: &C) -> Result<LoadNamespaceMetadataResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<LoadNamespaceMetadataResponse, ApiError> {
         let context = context.clone();
-        info!("load_namespace_metadata(\"{}\", \"{}\") - X-Span-ID: {:?}", prefix, namespace, context.get().0.clone());
+        info!(
+            "load_namespace_metadata(\"{}\", \"{}\") - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -210,10 +246,16 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         prefix: String,
         namespace: String,
         table: String,
-        context: &C) -> Result<LoadTableResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<LoadTableResponse, ApiError> {
         let context = context.clone();
-        info!("load_table(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}", prefix, namespace, table, context.get().0.clone());
+        info!(
+            "load_table(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            table,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -222,10 +264,15 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         &self,
         prefix: String,
         rename_table_request: models::RenameTableRequest,
-        context: &C) -> Result<RenameTableResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<RenameTableResponse, ApiError> {
         let context = context.clone();
-        info!("rename_table(\"{}\", {:?}) - X-Span-ID: {:?}", prefix, rename_table_request, context.get().0.clone());
+        info!(
+            "rename_table(\"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            rename_table_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -236,10 +283,17 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         namespace: String,
         table: String,
         report_metrics_request: models::ReportMetricsRequest,
-        context: &C) -> Result<ReportMetricsResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<ReportMetricsResponse, ApiError> {
         let context = context.clone();
-        info!("report_metrics(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}", prefix, namespace, table, report_metrics_request, context.get().0.clone());
+        info!(
+            "report_metrics(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            table,
+            report_metrics_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -249,10 +303,16 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         prefix: String,
         namespace: String,
         table: String,
-        context: &C) -> Result<TableExistsResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<TableExistsResponse, ApiError> {
         let context = context.clone();
-        info!("table_exists(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}", prefix, namespace, table, context.get().0.clone());
+        info!(
+            "table_exists(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            table,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -262,10 +322,16 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         prefix: String,
         namespace: String,
         update_namespace_properties_request: Option<models::UpdateNamespacePropertiesRequest>,
-        context: &C) -> Result<UpdatePropertiesResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<UpdatePropertiesResponse, ApiError> {
         let context = context.clone();
-        info!("update_properties(\"{}\", \"{}\", {:?}) - X-Span-ID: {:?}", prefix, namespace, update_namespace_properties_request, context.get().0.clone());
+        info!(
+            "update_properties(\"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            update_namespace_properties_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
@@ -276,18 +342,22 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         namespace: String,
         table: String,
         commit_table_request: Option<models::CommitTableRequest>,
-        context: &C) -> Result<UpdateTableResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<UpdateTableResponse, ApiError> {
         let context = context.clone();
-        info!("update_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}", prefix, namespace, table, commit_table_request, context.get().0.clone());
+        info!(
+            "update_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
+            prefix,
+            namespace,
+            table,
+            commit_table_request,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
 
     /// List all catalog configuration settings
-    async fn get_config(
-        &self,
-        context: &C) -> Result<GetConfigResponse, ApiError>
-    {
+    async fn get_config(&self, context: &C) -> Result<GetConfigResponse, ApiError> {
         let context = context.clone();
         info!("get_config() - X-Span-ID: {:?}", context.get().0.clone());
         Err(ApiError("Generic failure".into()))
@@ -305,11 +375,22 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
         subject_token_type: Option<models::TokenType>,
         actor_token: Option<String>,
         actor_token_type: Option<models::TokenType>,
-        context: &C) -> Result<GetTokenResponse, ApiError>
-    {
+        context: &C,
+    ) -> Result<GetTokenResponse, ApiError> {
         let context = context.clone();
-        info!("get_token({:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}) - X-Span-ID: {:?}", grant_type, scope, client_id, client_secret, requested_token_type, subject_token, subject_token_type, actor_token, actor_token_type, context.get().0.clone());
+        info!(
+            "get_token({:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}) - X-Span-ID: {:?}",
+            grant_type,
+            scope,
+            client_id,
+            client_secret,
+            requested_token_type,
+            subject_token,
+            subject_token_type,
+            actor_token,
+            actor_token_type,
+            context.get().0.clone()
+        );
         Err(ApiError("Generic failure".into()))
     }
-
 }
