@@ -39,7 +39,7 @@ async fn main() {
         )
         .get_matches();
 
-    let addr = "127.0.0.1:8080";
+    let addr = "0.0.0.0:8080";
 
     create(addr, matches.is_present("https")).await;
 }
