@@ -310,3 +310,38 @@ where
         Err(ApiError("Generic failure".into()))
     }
 }
+
+#[cfg(test)]
+
+pub mod tests {
+    use iceberg_catalog_rest_rdbms_client::{
+        apis::{self, configuration::Configuration},
+        models::CreateNamespaceRequest,
+    };
+
+    fn configuration() -> Configuration {
+        Configuration {
+            base_path: "http://localhost:8080".to_string(),
+            user_agent: None,
+            client: reqwest::Client::new(),
+            basic_auth: None,
+            oauth_access_token: None,
+            bearer_access_token: None,
+            api_key: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_namespace() {
+        let request = CreateNamespaceRequest {
+            namespace: vec!["public".to_owned()],
+            properties: None,
+        };
+        let response =
+            apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request))
+                .await
+                .expect("Failed to create namespace");
+        dbg!(response);
+        panic!();
+    }
+}
