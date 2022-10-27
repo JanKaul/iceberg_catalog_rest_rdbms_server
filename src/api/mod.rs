@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use log::info;
-use std::marker::PhantomData;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use serde_json::json;
 use swagger::{Has, XSpanIdString};
 
 use iceberg_catalog_rest_rdbms_server::models;
@@ -11,23 +13,24 @@ use iceberg_catalog_rest_rdbms_server::{
     LoadNamespaceMetadataResponse, LoadTableResponse, RenameTableResponse, ReportMetricsResponse,
     TableExistsResponse, UpdatePropertiesResponse, UpdateTableResponse,
 };
+
 use swagger::ApiError;
 
-#[derive(Copy, Clone)]
-pub struct Server<C> {
-    marker: PhantomData<C>,
+use crate::database::entities::{prelude::*, *};
+
+#[derive(Clone)]
+pub struct Server {
+    db: DatabaseConnection,
 }
 
-impl<C> Server<C> {
-    pub fn new() -> Self {
-        Server {
-            marker: PhantomData,
-        }
+impl Server {
+    pub fn new(db: DatabaseConnection) -> Self {
+        Server { db }
     }
 }
 
 #[async_trait]
-impl<C> Api<C> for Server<C>
+impl<C> Api<C> for Server
 where
     C: Has<XSpanIdString> + Send + Sync,
 {
@@ -36,16 +39,76 @@ where
         &self,
         prefix: String,
         create_namespace_request: Option<models::CreateNamespaceRequest>,
-        context: &C,
+        _context: &C,
     ) -> Result<CreateNamespaceResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "create_namespace(\"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            create_namespace_request,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            match Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+            {
+                None => {
+                    let new_catalog = catalog::ActiveModel::from_json(json!({
+                        "id": 0,
+                        "name": &prefix,
+                    }))
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                    Catalog::insert(new_catalog.clone())
+                        .on_conflict(
+                            // on conflict update
+                            OnConflict::column(catalog::Column::Name)
+                                .do_nothing()
+                                .to_owned(),
+                        )
+                        .exec(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?;
+
+                    Some(new_catalog)
+                }
+                x => x.map(|model| catalog::ActiveModel::from(model)),
+            }
+        } else {
+            None
+        };
+
+        let name = iter_tools::intersperse(
+            create_namespace_request
+                .ok_or(ApiError("Missing CreateNamespaceRequest.".into()))?
+                .namespace
+                .into_iter(),
+            ".".to_owned(),
+        )
+        .collect::<String>();
+
+        let new_namespace = namespace::ActiveModel::from_json(json!({
+            "id": 0,
+            "name": &name,
+            "catalog_id": catalog.and_then(|mut catalog| catalog.id.take())
+        }))
+        .map_err(|err| ApiError(err.to_string()))?;
+
+        Namespace::insert(new_namespace)
+            .on_conflict(
+                // on conflict update
+                OnConflict::column(catalog::Column::Name)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(|err| ApiError(err.to_string()))?;
+
+        Ok(
+            CreateNamespaceResponse::RepresentsASuccessfulCallToCreateANamespace(
+                models::CreateNamespace200Response {
+                    namespace: vec![name],
+                    properties: None,
+                },
+            ),
+        )
     }
 
     /// Create a table in the given namespace
@@ -341,7 +404,6 @@ pub mod tests {
             apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request))
                 .await
                 .expect("Failed to create namespace");
-        dbg!(response);
-        panic!();
+        assert_eq!(response.namespace[0], "public");
     }
 }

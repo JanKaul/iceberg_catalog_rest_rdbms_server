@@ -25,7 +25,12 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(IcebergTable::Name).string().not_null())
+                    .col(
+                        ColumnDef::new(IcebergTable::Name)
+                            .string()
+                            .unique_key()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(IcebergTable::MetadataLocation)
                             .string()

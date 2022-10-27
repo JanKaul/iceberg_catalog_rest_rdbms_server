@@ -23,7 +23,12 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Catalog::Name).string().not_null())
+                    .col(
+                        ColumnDef::new(Catalog::Name)
+                            .string()
+                            .unique_key()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await

@@ -1,16 +1,17 @@
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use sea_orm::{Database, DbBackend, DbErr, Statement};
 use sea_orm_migration::prelude::*;
 
+pub mod entities;
 mod migrator;
 
 const DATABASE_URL: &str = "postgres://postgres:postgres@localhost:5432";
 const DB_NAME: &str = "iceberg_catalog";
 
-pub(crate) async fn run() -> Result<(), DbErr> {
+pub(crate) async fn run() -> Result<DatabaseConnection, DbErr> {
     let db = Database::connect(DATABASE_URL).await?;
 
-    let db = &match db.get_database_backend() {
+    let db = match db.get_database_backend() {
         DbBackend::MySql => {
             db.execute(Statement::from_string(
                 db.get_database_backend(),
@@ -39,7 +40,7 @@ pub(crate) async fn run() -> Result<(), DbErr> {
         DbBackend::Sqlite => db,
     };
 
-    migrator::Migrator::refresh(db).await?;
+    migrator::Migrator::refresh(&db).await?;
 
-    Ok(())
+    Ok(db)
 }

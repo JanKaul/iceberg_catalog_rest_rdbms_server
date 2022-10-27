@@ -2,6 +2,7 @@
 
 use hyper::server::conn::Http;
 use hyper::service::Service;
+use sea_orm::DatabaseConnection;
 use swagger::auth::MakeAllowAllAuthenticator;
 use swagger::EmptyContext;
 use tokio::net::TcpListener;
@@ -36,7 +37,7 @@ struct Args {
 async fn main() {
     env_logger::init();
 
-    database::run().await.unwrap();
+    let db = database::run().await.unwrap();
 
     let args = Args::parse();
 
@@ -46,14 +47,14 @@ async fn main() {
 
     let addr = host + ":" + &port;
 
-    create(&addr, args.https).await;
+    create(&addr, args.https, db).await;
 }
 
 /// Builds an SSL implementation for Simple HTTPS from some hard-coded file names
-pub async fn create(addr: &str, https: bool) {
+pub async fn create(addr: &str, https: bool, db: DatabaseConnection) {
     let addr = addr.parse().expect("Failed to parse bind address");
 
-    let server = api::Server::new();
+    let server = api::Server::new(db);
 
     let service = MakeService::new(server);
 
