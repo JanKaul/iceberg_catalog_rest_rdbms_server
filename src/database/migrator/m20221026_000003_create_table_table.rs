@@ -1,6 +1,5 @@
 use sea_orm_migration::prelude::*;
 
-use super::m20221026_000001_create_catalog_table::Catalog;
 use super::m20221026_000002_create_namespace_table::Namespace;
 
 pub struct Migration;
