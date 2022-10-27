@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use log::info;
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait, QueryFilter,
+};
 use serde_json::json;
 use swagger::{Has, XSpanIdString};
 
-use iceberg_catalog_rest_rdbms_server::models;
+use iceberg_catalog_rest_rdbms_server::models::{self, TableMetadata};
 
 use iceberg_catalog_rest_rdbms_server::{
     Api, CreateNamespaceResponse, CreateTableResponse, DropNamespaceResponse, DropTableResponse,
@@ -55,7 +57,7 @@ where
                     }))
                     .map_err(|err| ApiError(err.to_string()))?;
 
-                    Catalog::insert(new_catalog.clone())
+                    let result = Catalog::insert(new_catalog.clone())
                         .on_conflict(
                             // on conflict update
                             OnConflict::column(catalog::Column::Name)
@@ -66,9 +68,12 @@ where
                         .await
                         .map_err(|err| ApiError(err.to_string()))?;
 
-                    Some(new_catalog)
+                    Catalog::find_by_id(result.last_insert_id)
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?
                 }
-                x => x.map(|model| catalog::ActiveModel::from(model)),
+                x => x,
             }
         } else {
             None
@@ -86,7 +91,7 @@ where
         let new_namespace = namespace::ActiveModel::from_json(json!({
             "id": 0,
             "name": &name,
-            "catalog_id": catalog.and_then(|mut catalog| catalog.id.take())
+            "catalog_id": catalog.map(|catalog| catalog.id)
         }))
         .map_err(|err| ApiError(err.to_string()))?;
 
@@ -117,17 +122,106 @@ where
         prefix: String,
         namespace: String,
         create_table_request: Option<models::CreateTableRequest>,
-        context: &C,
+        _context: &C,
     ) -> Result<CreateTableResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "create_table(\"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            create_table_request,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            match Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+            {
+                None => {
+                    let new_catalog = catalog::ActiveModel::from_json(json!({
+                        "id": 0,
+                        "name": &prefix,
+                    }))
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                    let result = Catalog::insert(new_catalog.clone())
+                        .on_conflict(
+                            // on conflict update
+                            OnConflict::column(catalog::Column::Name)
+                                .do_nothing()
+                                .to_owned(),
+                        )
+                        .exec(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?;
+
+                    Catalog::find_by_id(result.last_insert_id)
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?
+                }
+                x => x,
+            }
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        // Check if namespace exists
+        match namespace {
+            None => Ok(CreateTableResponse::NotFound(models::ErrorModel::new(
+                "The namespace specified does not exist".into(),
+                "NotFound".into(),
+                500,
+            ))),
+            Some(namespace) => {
+                let name = &create_table_request
+                    .as_ref()
+                    .ok_or(ApiError("Missing CreateNamespaceRequest.".into()))?
+                    .name;
+                let metadata_location = &create_table_request
+                    .as_ref()
+                    .ok_or(ApiError("Missing CreateNamespaceRequest.".into()))?
+                    .location
+                    .as_ref()
+                    .ok_or(ApiError("Missing metadata_location.".into()))?;
+
+                let new_table = iceberg_table::ActiveModel::from_json(json!({
+                    "id": 0,
+                    "name": &name,
+                    "namespace_id": namespace.id,
+                    "metadata_location": metadata_location,
+                    "previous_metadata_location": None::<String>
+                }))
+                .map_err(|err| ApiError(err.to_string()))?;
+
+                IcebergTable::insert(new_table)
+                    .on_conflict(
+                        // on conflict update
+                        OnConflict::column(catalog::Column::Name)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec(&self.db)
+                    .await
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                Ok(CreateTableResponse::TableMetadataResultAfterCreatingATable(
+                    models::LoadTableResult {
+                        metadata_location: Some(metadata_location.to_string()),
+                        config: None,
+                        metadata: TableMetadata::new(2, "".into()),
+                    },
+                ))
+            }
+        }
     }
 
     /// Drop a namespace from the catalog. Namespace must be empty.
@@ -379,7 +473,7 @@ where
 pub mod tests {
     use iceberg_catalog_rest_rdbms_client::{
         apis::{self, configuration::Configuration},
-        models::CreateNamespaceRequest,
+        models::{schema, CreateNamespaceRequest, CreateTableRequest, Schema},
     };
 
     fn configuration() -> Configuration {
@@ -405,5 +499,23 @@ pub mod tests {
                 .await
                 .expect("Failed to create namespace");
         assert_eq!(response.namespace[0], "public");
+    }
+
+    #[tokio::test]
+    async fn create_table() {
+        let mut request = CreateTableRequest::new(
+            "table1".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        request.location = Some("s3://path/to/location".into());
+        let response = apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "public",
+            Some(request),
+        )
+        .await
+        .expect("Failed to create namespace");
+        assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location");
     }
 }
