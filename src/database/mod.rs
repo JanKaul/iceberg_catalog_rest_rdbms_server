@@ -19,18 +19,29 @@ pub(crate) async fn run() -> Result<DatabaseConnection, DbErr> {
             ))
             .await?;
 
+            db.execute(Statement::from_string(
+                db.get_database_backend(),
+                format!("SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE"),
+            ))
+            .await?;
+
             let url = format!("{}/{}", DATABASE_URL, DB_NAME);
             Database::connect(&url).await?
         }
         DbBackend::Postgres => {
+            let _ = db
+                .execute(Statement::from_string(
+                    db.get_database_backend(),
+                    format!("CREATE DATABASE {}", DB_NAME),
+                ))
+                .await;
+
             db.execute(Statement::from_string(
                 db.get_database_backend(),
-                format!("DROP DATABASE IF EXISTS \"{}\";", DB_NAME),
-            ))
-            .await?;
-            db.execute(Statement::from_string(
-                db.get_database_backend(),
-                format!("CREATE DATABASE \"{}\";", DB_NAME),
+                format!(
+                    "ALTER DATABASE {} SET DEFAULT_TRANSACTION_ISOLATION TO SERIALIZABLE",
+                    DB_NAME
+                ),
             ))
             .await?;
 

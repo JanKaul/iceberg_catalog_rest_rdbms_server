@@ -548,27 +548,27 @@ pub mod tests {
     #[tokio::test]
     async fn create_namespace() {
         let request = CreateNamespaceRequest {
-            namespace: vec!["public".to_owned()],
+            namespace: vec!["create_namespace".to_owned()],
             properties: None,
         };
         let response =
             apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request))
                 .await
                 .expect("Failed to create namespace");
-        assert_eq!(response.namespace[0], "public");
+        assert_eq!(response.namespace[0], "create_namespace");
     }
 
     #[tokio::test]
     async fn drop_namespace() {
         let request = CreateNamespaceRequest {
-            namespace: vec!["test".to_owned()],
+            namespace: vec!["drop_namespace".to_owned()],
             properties: None,
         };
         apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request))
             .await
             .expect("Failed to create namespace");
 
-        apis::catalog_api_api::drop_namespace(&configuration(), "my_catalog", "test")
+        apis::catalog_api_api::drop_namespace(&configuration(), "my_catalog", "drop_namespace")
             .await
             .expect("Failed to create namespace");
     }
@@ -576,7 +576,7 @@ pub mod tests {
     #[tokio::test]
     async fn create_table() {
         let namespace_request = CreateNamespaceRequest {
-            namespace: vec!["public".to_owned()],
+            namespace: vec!["create_table".to_owned()],
             properties: None,
         };
         apis::catalog_api_api::create_namespace(
@@ -588,14 +588,14 @@ pub mod tests {
         .expect("Failed to create namespace");
 
         let mut request = CreateTableRequest::new(
-            "table1".to_owned(),
+            "create_table".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
         request.location = Some("s3://path/to/location".into());
         let response = apis::catalog_api_api::create_table(
             &configuration(),
             "my_catalog",
-            "public",
+            "create_table",
             Some(request),
         )
         .await
