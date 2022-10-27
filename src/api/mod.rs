@@ -229,16 +229,73 @@ where
         &self,
         prefix: String,
         namespace: String,
-        context: &C,
+        _context: &C,
     ) -> Result<DropNamespaceResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "drop_namespace(\"{}\", \"{}\") - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            match Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+            {
+                None => {
+                    let new_catalog = catalog::ActiveModel::from_json(json!({
+                        "id": 0,
+                        "name": &prefix,
+                    }))
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                    let result = Catalog::insert(new_catalog.clone())
+                        .on_conflict(
+                            // on conflict update
+                            OnConflict::column(catalog::Column::Name)
+                                .do_nothing()
+                                .to_owned(),
+                        )
+                        .exec(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?;
+
+                    Catalog::find_by_id(result.last_insert_id)
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?
+                }
+                x => x,
+            }
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        match namespace {
+            None => Ok(DropNamespaceResponse::NotFound(models::ErrorModel::new(
+                "Namespace to delete does not exist.".into(),
+                "NotFound".into(),
+                500,
+            ))),
+            Some(namespace) => {
+                namespace
+                    .delete(&self.db)
+                    .await
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                Ok(DropNamespaceResponse::Success)
+            }
+        }
     }
 
     /// Drop a table from the catalog
@@ -502,7 +559,34 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn drop_namespace() {
+        let request = CreateNamespaceRequest {
+            namespace: vec!["test".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request))
+            .await
+            .expect("Failed to create namespace");
+
+        apis::catalog_api_api::drop_namespace(&configuration(), "my_catalog", "test")
+            .await
+            .expect("Failed to create namespace");
+    }
+
+    #[tokio::test]
     async fn create_table() {
+        let namespace_request = CreateNamespaceRequest {
+            namespace: vec!["public".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
         let mut request = CreateTableRequest::new(
             "table1".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
@@ -515,7 +599,7 @@ pub mod tests {
             Some(request),
         )
         .await
-        .expect("Failed to create namespace");
+        .expect("Failed to create table");
         assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location");
     }
 }
