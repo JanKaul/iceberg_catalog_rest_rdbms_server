@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Namespace::Name).string().not_null())
-                    .col(ColumnDef::new(Namespace::CatalogId).integer().not_null())
+                    .col(ColumnDef::new(Namespace::CatalogId).integer())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk-namespace-catalog_id")

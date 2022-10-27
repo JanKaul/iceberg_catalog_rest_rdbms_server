@@ -33,13 +33,6 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(IcebergTable::PreviousMetadataLocation).string())
-                    .col(ColumnDef::new(IcebergTable::CatalogId).integer().not_null())
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk-table-catalog_id")
-                            .from(IcebergTable::Table, IcebergTable::CatalogId)
-                            .to(Catalog::Table, Catalog::Id),
-                    )
                     .col(
                         ColumnDef::new(IcebergTable::NamespaceId)
                             .integer()
@@ -69,7 +62,6 @@ pub enum IcebergTable {
     Table,
     Id,
     Name,
-    CatalogId,
     NamespaceId,
     MetadataLocation,
     PreviousMetadataLocation,
