@@ -512,16 +512,97 @@ where
         &self,
         prefix: String,
         rename_table_request: models::RenameTableRequest,
-        context: &C,
+        _context: &C,
     ) -> Result<RenameTableResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "rename_table(\"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            rename_table_request,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let old_namespace_name = iter_tools::intersperse(
+            rename_table_request.source.namespace.into_iter(),
+            ".".into(),
+        )
+        .collect::<String>();
+        let old_name = rename_table_request.source.name;
+        let new_namespace_name = iter_tools::intersperse(
+            rename_table_request.destination.namespace.into_iter(),
+            ".".into(),
+        )
+        .collect::<String>();
+        let new_name = rename_table_request.destination.name;
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let old_namespace = match &catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&old_namespace_name))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&old_namespace_name))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        let new_namespace = if old_namespace_name == new_namespace_name {
+            old_namespace.clone()
+        } else {
+            match &catalog {
+                None => Namespace::find()
+                    .filter(namespace::Column::Name.contains(&new_namespace_name))
+                    .one(&self.db)
+                    .await
+                    .map_err(|err| ApiError(err.to_string()))?,
+                Some(catalog) => catalog
+                    .find_related(Namespace)
+                    .filter(namespace::Column::Name.contains(&new_namespace_name))
+                    .one(&self.db)
+                    .await
+                    .map_err(|err| ApiError(err.to_string()))?,
+            }
+        };
+
+        let table = match old_namespace {
+            None => IcebergTable::find()
+                .filter(iceberg_table::Column::Name.contains(&old_name))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(old_namespace) => old_namespace
+                .find_related(IcebergTable)
+                .filter(iceberg_table::Column::Name.contains(&old_name))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+        match (table, new_namespace) {
+            (None, _) => Ok(RenameTableResponse::NotFound(models::ErrorModel::new(
+                "Table to rename does not exist.".into(),
+                "Not Found - NoSuchTableException".into(),
+                500,
+            ))),
+            (_, None) => Ok(RenameTableResponse::NotFound(models::ErrorModel::new(
+                "The target namespace of the new table identifier does not exist.".into(),
+                "NoSuchNamespaceException".into(),
+                500,
+            ))),
+            (Some(table), Some(namespace)) => {
+                let mut new_table: iceberg_table::ActiveModel = table.into();
+                new_table.set(iceberg_table::Column::Name, new_name.into());
+                new_table.set(iceberg_table::Column::NamespaceId, namespace.id.into());
+                new_table.update(&self.db).await.map_err(|err| {
+                    debug!("{}", &err);
+                    ApiError(err.to_string())
+                })?;
+                Ok(RenameTableResponse::OK)
+            }
+        }
     }
 
     /// Send a metrics report to this endpoint to be processed by the backend
