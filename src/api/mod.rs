@@ -52,7 +52,6 @@ where
             {
                 None => {
                     let new_catalog = catalog::ActiveModel::from_json(json!({
-                        "id": 0,
                         "name": &prefix,
                     }))
                     .map_err(|err| ApiError(err.to_string()))?;
@@ -89,7 +88,6 @@ where
         .collect::<String>();
 
         let new_namespace = namespace::ActiveModel::from_json(json!({
-            "id": 0,
             "name": &name,
             "catalog_id": catalog.map(|catalog| catalog.id)
         }))
@@ -133,7 +131,6 @@ where
             {
                 None => {
                     let new_catalog = catalog::ActiveModel::from_json(json!({
-                        "id": 0,
                         "name": &prefix,
                     }))
                     .map_err(|err| ApiError(err.to_string()))?;
@@ -194,7 +191,6 @@ where
                     .ok_or(ApiError("Missing metadata_location.".into()))?;
 
                 let new_table = iceberg_table::ActiveModel::from_json(json!({
-                    "id": 0,
                     "name": &name,
                     "namespace_id": namespace.id,
                     "metadata_location": metadata_location,
@@ -339,17 +335,36 @@ where
     async fn list_namespaces(
         &self,
         prefix: String,
-        parent: Option<String>,
-        context: &C,
+        _parent: Option<String>,
+        _context: &C,
     ) -> Result<ListNamespacesResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "list_namespaces(\"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            parent,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let namespaces = match catalog {
+            None => Namespace::find()
+                .all(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .all(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        Ok(ListNamespacesResponse::AListOfNamespaces(
+            models::ListNamespaces200Response {
+                namespaces: Some(vec![namespaces.into_iter().map(|x| x.name).collect()]),
+            },
+        ))
     }
 
     /// List all table identifiers underneath a given namespace
@@ -656,5 +671,32 @@ pub mod tests {
         )
         .await
         .expect("Failed to create namespace");
+    }
+
+    #[tokio::test]
+    async fn list_namespaces() {
+        let request1 = CreateNamespaceRequest {
+            namespace: vec!["list_namespaces1".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request1))
+            .await
+            .expect("Failed to create namespace");
+
+        let request2 = CreateNamespaceRequest {
+            namespace: vec!["list_namespaces2".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request2))
+            .await
+            .expect("Failed to create namespace");
+
+        let response = apis::catalog_api_api::list_namespaces(&configuration(), "my_catalog", None)
+            .await
+            .expect("Failed to list namespace");
+        assert_eq!(
+            response.namespaces.unwrap()[0],
+            vec!["list_namespaces1", "list_namespaces2"]
+        );
     }
 }
