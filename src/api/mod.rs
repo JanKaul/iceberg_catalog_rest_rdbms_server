@@ -232,37 +232,11 @@ where
         _context: &C,
     ) -> Result<DropNamespaceResponse, ApiError> {
         let catalog = if prefix != "" {
-            match Catalog::find()
+            Catalog::find()
                 .filter(catalog::Column::Name.contains(&prefix))
                 .one(&self.db)
                 .await
                 .map_err(|err| ApiError(err.to_string()))?
-            {
-                None => {
-                    let new_catalog = catalog::ActiveModel::from_json(json!({
-                        "id": 0,
-                        "name": &prefix,
-                    }))
-                    .map_err(|err| ApiError(err.to_string()))?;
-
-                    let result = Catalog::insert(new_catalog.clone())
-                        .on_conflict(
-                            // on conflict update
-                            OnConflict::column(catalog::Column::Name)
-                                .do_nothing()
-                                .to_owned(),
-                        )
-                        .exec(&self.db)
-                        .await
-                        .map_err(|err| ApiError(err.to_string()))?;
-
-                    Catalog::find_by_id(result.last_insert_id)
-                        .one(&self.db)
-                        .await
-                        .map_err(|err| ApiError(err.to_string()))?
-                }
-                x => x,
-            }
         } else {
             None
         };
