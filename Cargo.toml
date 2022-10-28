@@ -66,7 +66,7 @@ native-tls = "0.2"
 env_logger = "0.7"
 
 # Database
-sea-orm = { version = "^0.9.0", features = [ "sqlx-all", "runtime-async-std-native-tls", "macros" ] }
+sea-orm = { version = "^0.9.0", features = [ "sqlx-all", "runtime-tokio-native-tls", "macros" ] }
 sea-orm-migration = "^0.9.0"
 iter_tools = "0.1.4"
 
