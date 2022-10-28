@@ -551,17 +551,49 @@ where
         prefix: String,
         namespace: String,
         table: String,
-        context: &C,
+        _context: &C,
     ) -> Result<TableExistsResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "table_exists(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            table,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        let table = match namespace {
+            None => IcebergTable::find()
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(namespace) => namespace
+                .find_related(IcebergTable)
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+        match table {
+            None => Ok(TableExistsResponse::NotFound),
+            Some(_) => Ok(TableExistsResponse::OK),
+        }
     }
 
     /// Set or remove properties on a namespace
@@ -1032,5 +1064,95 @@ pub mod tests {
         .expect("Failed to create table");
 
         assert_eq!(response.metadata_location, "s3://path/to/location2");
+    }
+
+    #[tokio::test]
+    async fn rename_table() {
+        let namespace_request = models::CreateNamespaceRequest {
+            namespace: vec!["rename_table".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut create_request = models::CreateTableRequest::new(
+            "rename_table1".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        create_request.location = Some("s3://path/to/location1".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "rename_table",
+            Some(create_request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        let request = models::RenameTableRequest::new(
+            models::TableIdentifier {
+                name: "rename_table1".into(),
+                namespace: vec!["rename_table".into()],
+            },
+            models::TableIdentifier {
+                name: "rename_table2".into(),
+                namespace: vec!["rename_table".into()],
+            },
+        );
+        apis::catalog_api_api::rename_table(&configuration(), "my_catalog", request)
+            .await
+            .expect("Failed to create table");
+
+        apis::catalog_api_api::table_exists(
+            &configuration(),
+            "my_catalog",
+            "rename_table",
+            "rename_table2",
+        )
+        .await
+        .expect("Failed to create table");
+    }
+
+    #[tokio::test]
+    async fn table_exists() {
+        let namespace_request = models::CreateNamespaceRequest {
+            namespace: vec!["table_exists".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut create_request = models::CreateTableRequest::new(
+            "table_exists1".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        create_request.location = Some("s3://path/to/location1".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "table_exists",
+            Some(create_request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        apis::catalog_api_api::table_exists(
+            &configuration(),
+            "my_catalog",
+            "table_exists",
+            "table_exists1",
+        )
+        .await
+        .expect("Failed to create table");
     }
 }
