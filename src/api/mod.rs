@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use log::info;
+use log::{debug, info};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait, QueryFilter,
@@ -590,18 +590,90 @@ where
         namespace: String,
         table: String,
         commit_table_request: Option<models::CommitTableRequest>,
-        context: &C,
+        _context: &C,
     ) -> Result<UpdateTableResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "update_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            table,
-            commit_table_request,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        match commit_table_request {
+            None => Ok(UpdateTableResponse::IndicatesABadRequestError(
+                models::ErrorModel::new("No CommitTableRequest".into(), "BadRequest".into(), 500),
+            )),
+            Some(commit_table_request) => {
+                let catalog = if prefix != "" {
+                    Catalog::find()
+                        .filter(catalog::Column::Name.contains(&prefix))
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?
+                } else {
+                    None
+                };
+
+                let namespace = match catalog {
+                    None => Namespace::find()
+                        .filter(namespace::Column::Name.contains(&namespace))
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?,
+                    Some(catalog) => catalog
+                        .find_related(Namespace)
+                        .filter(namespace::Column::Name.contains(&namespace))
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?,
+                };
+
+                let table = match namespace {
+                    None => IcebergTable::find()
+                        .filter(iceberg_table::Column::Name.contains(&table))
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?,
+                    Some(namespace) => namespace
+                        .find_related(IcebergTable)
+                        .filter(iceberg_table::Column::Name.contains(&table))
+                        .one(&self.db)
+                        .await
+                        .map_err(|err| ApiError(err.to_string()))?,
+                };
+                match table {
+                    None => Ok(UpdateTableResponse::NotFound(models::ErrorModel::new(
+                        "Namespace to delete does not exist.".into(),
+                        "NotFound".into(),
+                        500,
+                    ))),
+                    Some(table) => {
+                        let old_metadata_location = table.metadata_location.clone();
+                        let mut new_table: iceberg_table::ActiveModel = table.into();
+                        new_table.set(
+                            iceberg_table::Column::MetadataLocation,
+                            commit_table_request
+                                .updates
+                                .iter()
+                                .last()
+                                .unwrap()
+                                .location
+                                .as_str()
+                                .into(),
+                        );
+                        new_table.set(
+                            iceberg_table::Column::PreviousMetadataLocation,
+                            Some(old_metadata_location).into(),
+                        );
+                        let new_table = new_table.update(&self.db).await.map_err(|err| {
+                            debug!("{}", &err);
+                            ApiError(err.to_string())
+                        })?;
+                        Ok(
+                            UpdateTableResponse::ResponseUsedWhenATableIsSuccessfullyUpdated(
+                                models::UpdateTable200Response {
+                                    metadata_location: new_table.metadata_location,
+                                    metadata: TableMetadata::new(2, "".into()),
+                                },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /// List all catalog configuration settings
@@ -646,9 +718,11 @@ where
 #[cfg(test)]
 
 pub mod tests {
+    use std::collections::HashMap;
+
     use iceberg_catalog_rest_rdbms_client::{
         apis::{self, configuration::Configuration},
-        models::{schema, CreateNamespaceRequest, CreateTableRequest, Schema},
+        models::{self, schema, Schema},
     };
 
     fn configuration() -> Configuration {
@@ -665,7 +739,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn create_namespace() {
-        let request = CreateNamespaceRequest {
+        let request = models::CreateNamespaceRequest {
             namespace: vec!["create_namespace".to_owned()],
             properties: None,
         };
@@ -678,7 +752,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn drop_namespace() {
-        let request = CreateNamespaceRequest {
+        let request = models::CreateNamespaceRequest {
             namespace: vec!["drop_namespace".to_owned()],
             properties: None,
         };
@@ -693,7 +767,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn create_table() {
-        let namespace_request = CreateNamespaceRequest {
+        let namespace_request = models::CreateNamespaceRequest {
             namespace: vec!["create_table".to_owned()],
             properties: None,
         };
@@ -705,7 +779,7 @@ pub mod tests {
         .await
         .expect("Failed to create namespace");
 
-        let mut request = CreateTableRequest::new(
+        let mut request = models::CreateTableRequest::new(
             "create_table".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
@@ -723,7 +797,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn drop_table() {
-        let namespace_request = CreateNamespaceRequest {
+        let namespace_request = models::CreateNamespaceRequest {
             namespace: vec!["drop_table".to_owned()],
             properties: None,
         };
@@ -735,7 +809,7 @@ pub mod tests {
         .await
         .expect("Failed to create namespace");
 
-        let mut request = CreateTableRequest::new(
+        let mut request = models::CreateTableRequest::new(
             "drop_table".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
@@ -762,7 +836,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn list_namespaces() {
-        let request1 = CreateNamespaceRequest {
+        let request1 = models::CreateNamespaceRequest {
             namespace: vec!["list_namespaces1".to_owned()],
             properties: None,
         };
@@ -770,7 +844,7 @@ pub mod tests {
             .await
             .expect("Failed to create namespace");
 
-        let request2 = CreateNamespaceRequest {
+        let request2 = models::CreateNamespaceRequest {
             namespace: vec!["list_namespaces2".to_owned()],
             properties: None,
         };
@@ -789,7 +863,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn list_tables() {
-        let namespace_request1 = CreateNamespaceRequest {
+        let namespace_request1 = models::CreateNamespaceRequest {
             namespace: vec!["list_tables".to_owned()],
             properties: None,
         };
@@ -801,7 +875,7 @@ pub mod tests {
         .await
         .expect("Failed to create namespace");
 
-        let mut request1 = CreateTableRequest::new(
+        let mut request1 = models::CreateTableRequest::new(
             "list_tables1".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
@@ -814,7 +888,7 @@ pub mod tests {
         )
         .await
         .expect("Failed to create table");
-        let mut request2 = CreateTableRequest::new(
+        let mut request2 = models::CreateTableRequest::new(
             "list_tables2".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
@@ -844,7 +918,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn load_table() {
-        let namespace_request = CreateNamespaceRequest {
+        let namespace_request = models::CreateNamespaceRequest {
             namespace: vec!["load_table".to_owned()],
             properties: None,
         };
@@ -856,7 +930,7 @@ pub mod tests {
         .await
         .expect("Failed to create namespace");
 
-        let mut request = CreateTableRequest::new(
+        let mut request = models::CreateTableRequest::new(
             "load_table".to_owned(),
             Schema::new(schema::RHashType::default(), vec![]),
         );
@@ -880,5 +954,83 @@ pub mod tests {
         .expect("Failed to create namespace");
 
         assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location")
+    }
+
+    #[tokio::test]
+    async fn update_table() {
+        let namespace_request = models::CreateNamespaceRequest {
+            namespace: vec!["update_table".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut create_request = models::CreateTableRequest::new(
+            "update_table".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        create_request.location = Some("s3://path/to/location1".into());
+        let create_response = apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "update_table",
+            Some(create_request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        let request = models::CommitTableRequest::new(
+            vec![],
+            vec![models::TableUpdate::new(
+                models::table_update::Action::SetLocation,
+                create_response.metadata.format_version,
+                create_response
+                    .metadata
+                    .schemas
+                    .map(|x| x[0].clone())
+                    .unwrap_or_else(|| models::Schema::new(schema::RHashType::default(), vec![])),
+                create_response.metadata.current_schema_id.unwrap_or(0),
+                create_response
+                    .metadata
+                    .partition_specs
+                    .map(|x| x[0].clone())
+                    .unwrap_or_else(|| models::PartitionSpec::default()),
+                create_response.metadata.default_spec_id.unwrap_or(0),
+                create_response
+                    .metadata
+                    .sort_orders
+                    .map(|x| x[0].clone())
+                    .unwrap_or_else(|| models::SortOrder::default()),
+                create_response.metadata.default_sort_order_id.unwrap_or(0),
+                create_response
+                    .metadata
+                    .snapshots
+                    .map(|x| x[0].clone())
+                    .unwrap_or_else(|| models::Snapshot::default()),
+                models::table_update::RHashType::default(),
+                create_response.metadata.current_snapshot_id.unwrap_or(0) as i64,
+                "update_table".into(),
+                vec![],
+                "s3://path/to/location2".into(),
+                HashMap::new(),
+                vec![],
+            )],
+        );
+        let response = apis::catalog_api_api::update_table(
+            &configuration(),
+            "my_catalog",
+            "update_table",
+            "update_table",
+            Some(request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        assert_eq!(response.metadata_location, "s3://path/to/location2");
     }
 }
