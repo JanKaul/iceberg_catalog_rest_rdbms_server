@@ -452,17 +452,59 @@ where
         prefix: String,
         namespace: String,
         table: String,
-        context: &C,
+        _context: &C,
     ) -> Result<LoadTableResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "load_table(\"{}\", \"{}\", \"{}\") - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            table,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        let table = match namespace {
+            None => IcebergTable::find()
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(namespace) => namespace
+                .find_related(IcebergTable)
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+        match table {
+            None => Ok(LoadTableResponse::NotFound(models::ErrorModel::new(
+                "Namespace to delete does not exist.".into(),
+                "NotFound".into(),
+                500,
+            ))),
+            Some(table) => Ok(LoadTableResponse::TableMetadataResultWhenLoadingATable(
+                models::LoadTableResult {
+                    metadata_location: Some(table.metadata_location.to_string()),
+                    config: None,
+                    metadata: TableMetadata::new(2, "".into()),
+                },
+            )),
+        }
     }
 
     /// Rename a table from its current name to a new name
@@ -798,5 +840,45 @@ pub mod tests {
                 .collect::<Vec<_>>(),
             vec!["list_tables1", "list_tables2"]
         );
+    }
+
+    #[tokio::test]
+    async fn load_table() {
+        let namespace_request = CreateNamespaceRequest {
+            namespace: vec!["load_table".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut request = CreateTableRequest::new(
+            "load_table".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        request.location = Some("s3://path/to/location".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "load_table",
+            Some(request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        let response = apis::catalog_api_api::load_table(
+            &configuration(),
+            "my_catalog",
+            "load_table",
+            "load_table",
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location")
     }
 }
