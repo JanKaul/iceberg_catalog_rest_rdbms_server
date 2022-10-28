@@ -278,19 +278,61 @@ where
         prefix: String,
         namespace: String,
         table: String,
-        purge_requested: Option<bool>,
-        context: &C,
+        _purge_requested: Option<bool>,
+        _context: &C,
     ) -> Result<DropTableResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "drop_table(\"{}\", \"{}\", \"{}\", {:?}) - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            table,
-            purge_requested,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        let table = match namespace {
+            None => IcebergTable::find()
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(namespace) => namespace
+                .find_related(IcebergTable)
+                .filter(iceberg_table::Column::Name.contains(&table))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+        match table {
+            None => Ok(DropTableResponse::NotFound(models::ErrorModel::new(
+                "Namespace to delete does not exist.".into(),
+                "NotFound".into(),
+                500,
+            ))),
+            Some(table) => {
+                table
+                    .delete(&self.db)
+                    .await
+                    .map_err(|err| ApiError(err.to_string()))?;
+
+                Ok(DropTableResponse::Success)
+            }
+        }
     }
 
     /// List namespaces, optionally providing a parent namespace to list underneath
@@ -575,5 +617,44 @@ pub mod tests {
         .await
         .expect("Failed to create table");
         assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location");
+    }
+
+    #[tokio::test]
+    async fn drop_table() {
+        let namespace_request = CreateNamespaceRequest {
+            namespace: vec!["drop_table".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut request = CreateTableRequest::new(
+            "drop_table".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        request.location = Some("s3://path/to/location".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "drop_table",
+            Some(request),
+        )
+        .await
+        .expect("Failed to create table");
+
+        apis::catalog_api_api::drop_table(
+            &configuration(),
+            "my_catalog",
+            "drop_table",
+            "drop_table",
+            Some(true),
+        )
+        .await
+        .expect("Failed to create namespace");
     }
 }
