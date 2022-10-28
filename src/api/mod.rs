@@ -372,16 +372,61 @@ where
         &self,
         prefix: String,
         namespace: String,
-        context: &C,
+        _context: &C,
     ) -> Result<ListTablesResponse, ApiError> {
-        let context = context.clone();
-        info!(
-            "list_tables(\"{}\", \"{}\") - X-Span-ID: {:?}",
-            prefix,
-            namespace,
-            context.get().0.clone()
-        );
-        Err(ApiError("Generic failure".into()))
+        let catalog = if prefix != "" {
+            Catalog::find()
+                .filter(catalog::Column::Name.contains(&prefix))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?
+        } else {
+            None
+        };
+
+        let namespace = match catalog {
+            None => Namespace::find()
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(catalog) => catalog
+                .find_related(Namespace)
+                .filter(namespace::Column::Name.contains(&namespace))
+                .one(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+
+        let tables = match namespace.as_ref() {
+            None => IcebergTable::find()
+                .all(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+            Some(namespace) => namespace
+                .find_related(IcebergTable)
+                .all(&self.db)
+                .await
+                .map_err(|err| ApiError(err.to_string()))?,
+        };
+        Ok(ListTablesResponse::AListOfTableIdentifiers(
+            models::ListTables200Response {
+                identifiers: Some(
+                    tables
+                        .into_iter()
+                        .map(|x| models::TableIdentifier {
+                            name: x.name,
+                            namespace: match namespace.as_ref() {
+                                Some(namespace) => {
+                                    namespace.name.split('.').map(|s| s.to_owned()).collect()
+                                }
+                                None => vec![],
+                            },
+                        })
+                        .collect(),
+                ),
+            },
+        ))
     }
 
     /// Load the metadata properties for a namespace
@@ -697,6 +742,61 @@ pub mod tests {
         assert_eq!(
             response.namespaces.unwrap()[0],
             vec!["list_namespaces1", "list_namespaces2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_tables() {
+        let namespace_request1 = CreateNamespaceRequest {
+            namespace: vec!["list_tables".to_owned()],
+            properties: None,
+        };
+        apis::catalog_api_api::create_namespace(
+            &configuration(),
+            "my_catalog",
+            Some(namespace_request1),
+        )
+        .await
+        .expect("Failed to create namespace");
+
+        let mut request1 = CreateTableRequest::new(
+            "list_tables1".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        request1.location = Some("s3://path/to/location".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "list_tables",
+            Some(request1),
+        )
+        .await
+        .expect("Failed to create table");
+        let mut request2 = CreateTableRequest::new(
+            "list_tables2".to_owned(),
+            Schema::new(schema::RHashType::default(), vec![]),
+        );
+        request2.location = Some("s3://path/to/location".into());
+        apis::catalog_api_api::create_table(
+            &configuration(),
+            "my_catalog",
+            "list_tables",
+            Some(request2),
+        )
+        .await
+        .expect("Failed to create table");
+        let response =
+            apis::catalog_api_api::list_tables(&configuration(), "my_catalog", "list_tables")
+                .await
+                .expect("Failed to create table");
+        assert_eq!(
+            response
+                .identifiers
+                .unwrap()
+                .into_iter()
+                .map(|x| x.name)
+                .collect::<Vec<_>>(),
+            vec!["list_tables1", "list_tables2"]
         );
     }
 }
