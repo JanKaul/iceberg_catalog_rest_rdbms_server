@@ -1,4 +1,5 @@
 //! Main library entry point for openapi_client implementation.
+use std::env;
 
 use hyper::server::conn::Http;
 use hyper::service::Service;
@@ -37,7 +38,18 @@ struct Args {
 async fn main() {
     env_logger::init();
 
-    let db = database::run().await.unwrap();
+    let db_type = env::var("DB_TYPE").unwrap_or("postgres".to_owned());
+    let db_user = env::var("DB_USER").unwrap_or("postgres".to_owned());
+    let db_password = env::var("DB_PASSWORD").expect("Database password has to be provided");
+    let db_host = env::var("DB_HOST").expect("Database host has to be provided");
+    let db_port = env::var("DB_PORT").unwrap_or("5432".to_owned());
+
+    let db_name = env::var("DB_NAME").unwrap_or("iceberg_catalog".to_owned());
+
+    let db_connection =
+        db_type + "://" + &db_user + ":" + &db_password + "@" + &db_host + ":" + &db_port;
+
+    let db = database::run(&db_connection, &db_name).await.unwrap();
 
     let args = Args::parse();
 

@@ -5,17 +5,14 @@ use sea_orm_migration::prelude::*;
 pub mod entities;
 mod migrator;
 
-const DATABASE_URL: &str = "postgres://postgres:postgres@localhost:5432";
-const DB_NAME: &str = "iceberg_catalog";
-
-pub(crate) async fn run() -> Result<DatabaseConnection, DbErr> {
-    let db = Database::connect(DATABASE_URL).await?;
+pub(crate) async fn run(connection: &str, db_name: &str) -> Result<DatabaseConnection, DbErr> {
+    let db = Database::connect(connection).await?;
 
     let db = match db.get_database_backend() {
         DbBackend::MySql => {
             db.execute(Statement::from_string(
                 db.get_database_backend(),
-                format!("CREATE DATABASE IF NOT EXISTS `{}`;", DB_NAME),
+                format!("CREATE DATABASE IF NOT EXISTS `{}`;", db_name),
             ))
             .await?;
 
@@ -25,14 +22,14 @@ pub(crate) async fn run() -> Result<DatabaseConnection, DbErr> {
             ))
             .await?;
 
-            let url = format!("{}/{}", DATABASE_URL, DB_NAME);
+            let url = format!("{}/{}", connection, db_name);
             Database::connect(&url).await?
         }
         DbBackend::Postgres => {
             let _ = db
                 .execute(Statement::from_string(
                     db.get_database_backend(),
-                    format!("CREATE DATABASE {}", DB_NAME),
+                    format!("CREATE DATABASE {}", db_name),
                 ))
                 .await;
 
@@ -40,12 +37,12 @@ pub(crate) async fn run() -> Result<DatabaseConnection, DbErr> {
                 db.get_database_backend(),
                 format!(
                     "ALTER DATABASE {} SET DEFAULT_TRANSACTION_ISOLATION TO SERIALIZABLE",
-                    DB_NAME
+                    db_name
                 ),
             ))
             .await?;
 
-            let url = format!("{}/{}", DATABASE_URL, DB_NAME);
+            let url = format!("{}/{}", connection, db_name);
             Database::connect(&url).await?
         }
         DbBackend::Sqlite => db,
