@@ -790,10 +790,13 @@ where
     }
 
     /// List all catalog configuration settings
-    async fn get_config(&self, context: &C) -> Result<GetConfigResponse, ApiError> {
-        let context = context.clone();
-        info!("get_config() - X-Span-ID: {:?}", context.get().0.clone());
-        Err(ApiError("Generic failure".into()))
+    async fn get_config(&self, _context: &C) -> Result<GetConfigResponse, ApiError> {
+        Ok(GetConfigResponse::ServerSpecifiedConfigurationValues(
+            models::CatalogConfig {
+                overrides: serde_json::from_str("{}").map_err(|err| ApiError(err.to_string()))?,
+                defaults: serde_json::from_str("{}").map_err(|err| ApiError(err.to_string()))?,
+            },
+        ))
     }
 
     /// Get a token using an OAuth2 flow

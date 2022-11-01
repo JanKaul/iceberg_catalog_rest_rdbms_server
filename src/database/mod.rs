@@ -6,7 +6,7 @@ pub mod entities;
 mod migrator;
 
 pub(crate) async fn run(connection: &str, db_name: &str) -> Result<DatabaseConnection, DbErr> {
-    let db = Database::connect(connection).await?;
+    let db = Database::connect(connection.to_owned() + "/postgres").await?;
 
     let db = match db.get_database_backend() {
         DbBackend::MySql => {

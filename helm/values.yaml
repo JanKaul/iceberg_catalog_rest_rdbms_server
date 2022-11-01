@@ -2,6 +2,13 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+global:
+  postgresql:
+    auth:
+      username: iceberg
+      password: iceberg
+      database: iceberg_catalog
+
 replicaCount: 1
 
 image:
@@ -38,7 +45,8 @@ securityContext: {}
 
 service:
   type: ClusterIP
-  port: 80
+  externalPort: 8080
+  internalPort: 8080
 
 ingress:
   enabled: false
