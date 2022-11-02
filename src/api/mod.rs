@@ -92,7 +92,7 @@ where
                     Namespace::insert(new_namespace)
                         .on_conflict(
                             // on conflict update
-                            OnConflict::column(catalog::Column::Name)
+                            OnConflict::column(namespace::Column::Name)
                                 .do_nothing()
                                 .to_owned(),
                         )
@@ -193,7 +193,7 @@ where
                             IcebergTable::insert(new_table)
                                 .on_conflict(
                                     // on conflict update
-                                    OnConflict::column(catalog::Column::Name)
+                                    OnConflict::column(iceberg_table::Column::Name)
                                         .do_nothing()
                                         .to_owned(),
                                 )
@@ -1016,9 +1016,11 @@ pub mod tests {
         let response = apis::catalog_api_api::list_namespaces(&configuration(), "my_catalog", None)
             .await
             .expect("Failed to list namespace");
-        assert_eq!(
-            response.namespaces.unwrap()[0],
-            vec!["list_namespaces1", "list_namespaces2"]
+        assert!(
+            response.namespaces.as_ref().unwrap().iter().any(|x| x[0] == "list_namespaces1")
+        );
+        assert!(
+            response.namespaces.as_ref().unwrap().iter().any(|x| x[0] == "list_namespaces2")
         );
     }
 
@@ -1193,6 +1195,16 @@ pub mod tests {
         .expect("Failed to create table");
 
         assert_eq!(response.metadata_location, "s3://path/to/location2");
+
+        apis::catalog_api_api::drop_table(
+            &configuration(),
+            "my_catalog",
+            "update_table",
+            "update_table",
+            Some(true),
+        )
+        .await
+        .expect("Failed to delete table");
     }
 
     #[tokio::test]
@@ -1245,6 +1257,16 @@ pub mod tests {
         )
         .await
         .expect("Failed to create table");
+
+        apis::catalog_api_api::drop_table(
+            &configuration(),
+            "my_catalog",
+            "rename_table",
+            "rename_table2",
+            Some(true),
+        )
+        .await
+        .expect("Failed to delete table");
     }
 
     #[tokio::test]
