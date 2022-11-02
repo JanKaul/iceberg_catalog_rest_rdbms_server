@@ -86,27 +86,55 @@ where
 
                     let new_namespace = namespace::ActiveModel::from_json(json!({
                         "name": &name,
-                        "catalog_id": catalog.map(|catalog| catalog.id)
+                        "catalog_id": catalog.as_ref().map(|catalog| catalog.id)
                     }))?;
 
-                    Namespace::insert(new_namespace)
-                        .on_conflict(
-                            // on conflict update
-                            OnConflict::column(namespace::Column::Name)
-                                .do_nothing()
-                                .to_owned(),
-                        )
-                        .exec(txn)
-                        .await?;
+                    let namespace = match catalog {
+                        None => {
+                            Namespace::find()
+                                .filter(namespace::Column::Name.contains(&name))
+                                .one(txn)
+                                .await?
+                        }
+                        Some(catalog) => {
+                            catalog
+                                .find_related(Namespace)
+                                .filter(namespace::Column::Name.contains(&name))
+                                .one(txn)
+                                .await?
+                        }
+                    };
 
-                    Ok(
-                        CreateNamespaceResponse::RepresentsASuccessfulCallToCreateANamespace(
-                            models::CreateNamespace200Response {
-                                namespace: vec![name],
-                                properties: None,
-                            },
-                        ),
-                    )
+                    match namespace {
+                        None => {
+                            Namespace::insert(new_namespace)
+                            .on_conflict(
+                                // on conflict update
+                                OnConflict::column(namespace::Column::Name)
+                                    .do_nothing()
+                                    .to_owned(),
+                            )
+                            .exec(txn)
+                            .await?;
+                            
+                            Ok(
+                            CreateNamespaceResponse::RepresentsASuccessfulCallToCreateANamespace(
+                                models::CreateNamespace200Response {
+                                    namespace: vec![name],
+                                    properties: None,
+                                },
+                            ),
+                        )},
+                        Some(_) => {
+                            Ok(CreateNamespaceResponse::Conflict(models::ErrorModel::new(
+                                "The namespace already exists".into(),
+                                "Conflict".into(),
+                                500,
+                            )))
+                        }
+                    }
+
+                    
                 })
             })
             .await
@@ -183,30 +211,44 @@ where
                             500,
                         ))),
                         Some(namespace) => {
-                            let new_table = iceberg_table::ActiveModel::from_json(json!({
-                                "name": &name,
-                                "namespace_id": namespace.id,
-                                "metadata_location": metadata_location,
-                                "previous_metadata_location": None::<String>
-                            }))?;
-
-                            IcebergTable::insert(new_table)
-                                .on_conflict(
-                                    // on conflict update
-                                    OnConflict::column(iceberg_table::Column::Name)
-                                        .do_nothing()
-                                        .to_owned(),
-                                )
-                                .exec(txn)
-                                .await?;
-
-                            Ok(CreateTableResponse::TableMetadataResultAfterCreatingATable(
-                                models::LoadTableResult {
-                                    metadata_location: Some(metadata_location.to_string()),
-                                    config: None,
-                                    metadata: TableMetadata::new(2, "".into()),
-                                },
-                            ))
+                            let table = namespace
+                            .find_related(IcebergTable)
+                            .filter(iceberg_table::Column::Name.contains(&name))
+                            .one(txn)
+                            .await?;
+                            match table {
+                                Some(_) => Ok(CreateTableResponse::Conflict(models::ErrorModel::new(
+                                    "The table already exists.".into(),
+                                    "Conflict".into(),
+                                    500,
+                                ))),
+                                None => {
+                                    let new_table = iceberg_table::ActiveModel::from_json(json!({
+                                        "name": &name,
+                                        "namespace_id": namespace.id,
+                                        "metadata_location": metadata_location,
+                                        "previous_metadata_location": None::<String>
+                                    }))?;
+        
+                                    IcebergTable::insert(new_table)
+                                        .on_conflict(
+                                            // on conflict update
+                                            OnConflict::column(iceberg_table::Column::Name)
+                                                .do_nothing()
+                                                .to_owned(),
+                                        )
+                                        .exec(txn)
+                                        .await?;
+        
+                                    Ok(CreateTableResponse::TableMetadataResultAfterCreatingATable(
+                                        models::LoadTableResult {
+                                            metadata_location: Some(metadata_location.to_string()),
+                                            config: None,
+                                            metadata: TableMetadata::new(2, "".into()),
+                                        },
+                                    ))
+                                }
+                            }
                         }
                     }
                 })
@@ -909,6 +951,10 @@ pub mod tests {
                 .await
                 .expect("Failed to create namespace");
         assert_eq!(response.namespace[0], "create_namespace");
+
+        apis::catalog_api_api::drop_namespace(&configuration(), "my_catalog", "create_namespace")
+            .await
+            .expect("Failed to drop namespace");
     }
 
     #[tokio::test]
@@ -923,7 +969,7 @@ pub mod tests {
 
         apis::catalog_api_api::drop_namespace(&configuration(), "my_catalog", "drop_namespace")
             .await
-            .expect("Failed to create namespace");
+            .expect("Failed to drop namespace");
     }
 
     #[tokio::test]
@@ -932,13 +978,12 @@ pub mod tests {
             namespace: vec!["create_table".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut request = models::CreateTableRequest::new(
             "create_table".to_owned(),
@@ -954,6 +999,16 @@ pub mod tests {
         .await
         .expect("Failed to create table");
         assert_eq!(response.metadata_location.unwrap(), "s3://path/to/location");
+
+        apis::catalog_api_api::drop_table(
+            &configuration(),
+            "my_catalog",
+            "create_table",
+            "create_table",
+            Some(true),
+        )
+        .await
+        .expect("Failed to create namespace");
     }
 
     #[tokio::test]
@@ -962,13 +1017,12 @@ pub mod tests {
             namespace: vec!["drop_table".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut request = models::CreateTableRequest::new(
             "drop_table".to_owned(),
@@ -1001,17 +1055,15 @@ pub mod tests {
             namespace: vec!["list_namespaces1".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request1))
-            .await
-            .expect("Failed to create namespace");
+        let _ = apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request1))
+            .await;
 
         let request2 = models::CreateNamespaceRequest {
             namespace: vec!["list_namespaces2".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request2))
-            .await
-            .expect("Failed to create namespace");
+        let _ = apis::catalog_api_api::create_namespace(&configuration(), "my_catalog", Some(request2))
+            .await;
 
         let response = apis::catalog_api_api::list_namespaces(&configuration(), "my_catalog", None)
             .await
@@ -1030,13 +1082,12 @@ pub mod tests {
             namespace: vec!["list_tables".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request1),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut request1 = models::CreateTableRequest::new(
             "list_tables1".to_owned(),
@@ -1085,13 +1136,12 @@ pub mod tests {
             namespace: vec!["load_table".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut request = models::CreateTableRequest::new(
             "load_table".to_owned(),
@@ -1125,13 +1175,12 @@ pub mod tests {
             namespace: vec!["update_table".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut create_request = models::CreateTableRequest::new(
             "update_table".to_owned(),
@@ -1213,13 +1262,12 @@ pub mod tests {
             namespace: vec!["rename_table".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut create_request = models::CreateTableRequest::new(
             "rename_table1".to_owned(),
@@ -1275,13 +1323,12 @@ pub mod tests {
             namespace: vec!["table_exists".to_owned()],
             properties: None,
         };
-        apis::catalog_api_api::create_namespace(
+        let _ = apis::catalog_api_api::create_namespace(
             &configuration(),
             "my_catalog",
             Some(namespace_request),
         )
-        .await
-        .expect("Failed to create namespace");
+        .await;
 
         let mut create_request = models::CreateTableRequest::new(
             "table_exists1".to_owned(),
