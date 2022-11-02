@@ -843,7 +843,7 @@ pub mod tests {
 
     fn configuration() -> Configuration {
         Configuration {
-            base_path: "http://localhost:8080".to_string(),
+            base_path: "http://localhost:80".to_string(),
             user_agent: None,
             client: reqwest::Client::new(),
             basic_auth: None,
