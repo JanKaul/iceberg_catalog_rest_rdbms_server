@@ -406,10 +406,10 @@ where
 
                     Ok(ListNamespacesResponse::AListOfNamespaces(
                         models::ListNamespaces200Response {
-                            namespaces: Some(vec![namespaces
+                            namespaces: Some(namespaces
                                 .into_iter()
-                                .map(|x| x.name)
-                                .collect()]),
+                                .map(|x| x.name.split(".").map(|x|x.to_owned()).collect())
+                                .collect()),
                         },
                     ))
                 })
