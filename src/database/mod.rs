@@ -48,7 +48,11 @@ pub(crate) async fn run(connection: &str, db_name: &str) -> Result<DatabaseConne
         DbBackend::Sqlite => db,
     };
 
-    migrator::Migrator::refresh(&db).await?;
+    let schema_manager = SchemaManager::new(&db); // To investigate the schema
+
+    if !schema_manager.has_table("catalog").await? {
+        migrator::Migrator::refresh(&db).await?;
+    }
 
     Ok(db)
 }
